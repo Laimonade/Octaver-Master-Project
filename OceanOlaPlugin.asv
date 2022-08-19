@@ -5,6 +5,7 @@ classdef OceanOlaPlugin < audioPlugin & matlab.System
     % Init properties that the end-user interacts with.
     properties
         Octave = 'Off'
+        Zeropad = '1'
         dwMix = 0.5
     end
     
@@ -23,7 +24,6 @@ classdef OceanOlaPlugin < audioPlugin & matlab.System
 
         processHopIndex; % Running index of processed STFT frames since the beginning
         outputHopIndex; % Running index of synthesized STFT frames since the beginning
-        overflowWarned;
         
         % Buffers
         windowedInputBlock;
@@ -33,7 +33,6 @@ classdef OceanOlaPlugin < audioPlugin & matlab.System
         inputSpectrum;
         unityRoots;
         outputSpectrum;
-        overlapAddBuffer;
         cycleLength;
         scaledRePart;
         scaledImPart;
@@ -49,6 +48,7 @@ classdef OceanOlaPlugin < audioPlugin & matlab.System
 
         % Circular output buffer
         outputBuffer;
+        outputBufferInitLatency;
         outputBufferWritePointer;
         outputBufferReadPointer;
 
@@ -66,7 +66,8 @@ classdef OceanOlaPlugin < audioPlugin & matlab.System
     properties (Constant)
 
         PluginInterface = audioPluginInterface(...
-            audioPluginParameter('Octave', 'Mapping', {'enum', '-2', '-1', 'Off', '1', '2'}));
+            audioPluginParameter('Octave', 'Mapping', {'enum', '-2', '-1', 'Off', '1', '2'}), ...
+            audioPluginParameter('Zeropad', 'Mapping', {'enum', '1', '2', '4'}));
     end
     
 
@@ -76,14 +77,13 @@ classdef OceanOlaPlugin < audioPlugin & matlab.System
 
             %%%%%% INIT USEFUL VARIABLES %%%%%%
             plugin.blockSize = 1024; % 'N' in the paper
-            plugin.overlap = 4; % 'O' in the paper
+            plugin.overlap = 8; % 'O' in the paper
             plugin.hopSize = plugin.blockSize / plugin.overlap; % size of input and output audio chunks, N/O
-            plugin.zeroPad = 1; % 'm' in the paper
+%             plugin.zeroPad = 2; % 'm' in the paper
             plugin.nbInputBins = (plugin.blockSize / 2) + 1; % Number of spectral bins, input
             plugin.nbOutputBins = ((plugin.blockSize * plugin.zeroPad) / 2) + 1; % Number of spectral bins, output
             plugin.processHopIndex = -(plugin.overlap - 1); % Running index of processed STFT frames since the beginning
             plugin.outputHopIndex = plugin.processHopIndex; % Running index of synthesized STFT frames since the beginning
-            plugin.overflowWarned = false; 
 
 
             %%%%%% INIT BUFFERS %%%%%%
@@ -100,8 +100,9 @@ classdef OceanOlaPlugin < audioPlugin & matlab.System
             % Initialize output buffer
             % plugin.outputBlock = dsp.AsyncBuffer;
             % write(plugin.outputBlock, zeros(plugin.blockSize * plugin.zeroPad));
-            plugin.outputBuffer = zeros(plugin.bufferSize, 1, 'single');
-            plugin.outputBufferWritePointer = plugin.hopSize;
+            plugin.outputBuffer = zeros(plugin.bufferSize * plugin.zeroPad, 1, 'single');
+            plugin.outputBufferInitLatency = plugin.blockSize - plugin.hopSize; % plugin.hopSize;
+            plugin.outputBufferWritePointer = plugin.outputBufferInitLatency;
             plugin.outputBufferReadPointer = 1;
 
             
@@ -162,7 +163,7 @@ classdef OceanOlaPlugin < audioPlugin & matlab.System
                     + length(monoIn) - 1, 1) = zeros(length(monoIn), 1, 'single');
                 
                 % Scale output down by the overlap factor
-                output = output .* single(1 / plugin.overlap);
+                % output = output .* single(1 / plugin.overlap);
                 
                 % Increment circular inputBuffer pointer
                 plugin.outputBufferReadPointer = int32(plugin.outputBufferReadPointer + length(monoIn));
@@ -191,20 +192,22 @@ classdef OceanOlaPlugin < audioPlugin & matlab.System
                     % in matlab. We are also missing the last element of
                     % the buffer as in matlab we need [1:1024] and not
                     % [0:1023]. This leads to 'add 1' to the length of the
-                    % buffer size. Because we are increasing the buffer by 256 values, 
-                    % we are wrapping around bufferSize/blockSize, leading
-                    % to sometimes wrap around between [769-1024:1-256].
+                    % buffer size. Because we are increasing the buffer by 
+                    % 256 values, we are wrapping around bufferSize/blockSize, 
+                    % leading to sometimes wrap around between [769-1024:1-256].
                     % When this happen, we add 1 to the index to scale the
                     % i to go from [0:255] to [1:256] --> 'indexTrick'.
-
+                    
+                    indexTrick = 0;
                     for i = 1:plugin.blockSize
                         index = mod((plugin.inputBufferPointer + i - plugin.blockSize + plugin.bufferSize), ...
-                            plugin.bufferSize); 
+                            plugin.bufferSize + 1); 
 
                         if index ~= 0
-                            inCircBuffIndex = index;
+                            inCircBuffIndex = index + indexTrick;
                         else
                             inCircBuffIndex = 1;
+                            indexTrick = 1;
                         end
 
                         unwrappedBuffer(i) = plugin.inputBuffer(inCircBuffIndex);
@@ -228,14 +231,16 @@ classdef OceanOlaPlugin < audioPlugin & matlab.System
                     modSignal = real(ifft(reconstrutedAndShiftedSignal, plugin.blockSize * plugin.zeroPad));
                     
                     % Window output block with synthesis window
-                    plugin.windowedOutputBlock = modSignal .* plugin.synthesisWindow;
+                    plugin.windowedOutputBlock = modSignal(1:plugin.blockSize) .* plugin.synthesisWindow;
                     
+                    indexTrick = 0;
                     for i = 1:plugin.blockSize
-                        index = mod((plugin.outputBufferWritePointer + i), plugin.bufferSize);
+                        index = mod((plugin.outputBufferWritePointer + i), plugin.bufferSize + 1);
                         if index ~= 0
-                            outCircBuffIndex = index;
+                            outCircBuffIndex = index + indexTrick;
                         else
                             outCircBuffIndex = 1;
+                            indexTrick = 1;
                         end
                         plugin.outputBuffer(outCircBuffIndex, 1) = plugin.outputBuffer(outCircBuffIndex) + plugin.windowedOutputBlock(i);
                     end
@@ -270,14 +275,10 @@ classdef OceanOlaPlugin < audioPlugin & matlab.System
             % Initialize output buffer
             % plugin.outputBlock = dsp.AsyncBuffer;
             % write(plugin.outputBlock, zeros(plugin.blockSize * plugin.zeroPad));
-            plugin.outputBuffer = zeros(plugin.bufferSize, 1, 'single');
-            plugin.outputBufferWritePointer = plugin.blockSize - plugin.hopSize;
+            plugin.outputBuffer = zeros(plugin.bufferSize * plugin.zeroPad, 1, 'single');
+            plugin.outputBufferWritePointer = plugin.outputBufferInitLatency;
             plugin.outputBufferReadPointer = 1;
-
-            % reset overlap add buffer
-            plugin.overlapAddBuffer = zeros(plugin.blockSize - plugin.hopSize, 1, 'single');
            
-            
             % reset windowed input array
             plugin.windowedInputBlock = zeros(plugin.blockSize, 1, 'single');
             plugin.windowedOutputBlock = zeros(plugin.blockSize * plugin.zeroPad, 1, 'single');
@@ -325,6 +326,10 @@ classdef OceanOlaPlugin < audioPlugin & matlab.System
                 case '2'
                     plugin.pitchShiftRatio = 4; %#ok<MCSUP>
             end
+        end
+
+        function set.Zeropad(plugin, val)
+            plugin.zeroPad = str2double(val); 
         end
 
     end
