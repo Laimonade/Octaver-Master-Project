@@ -125,6 +125,8 @@ classdef OceanOlaPlugin < audioPlugin & matlab.System
 
             plugin.cycleLength = plugin.overlap * plugin.zeroPad;
 
+            plugin.unityRoots = complex(getRoots(plugin.cycleLength, plugin.cycleLength));
+
         end
         
 
@@ -369,35 +371,67 @@ classdef OceanOlaPlugin < audioPlugin & matlab.System
 
                 % Compute new shifted bin
                 newBin = floor((paddedBin * plugin.pitchShiftRatio) + 0.5); % b:= floor(m*k*a + 0.5)
+                
+%                 PHASEMETHOD = "github";
+                PHASEMETHOD = "paper";
 
-                % Make sure bin is in between range of outputBin
-                if newBin > 0 && newBin < plugin.nbOutputBins
-                    rePart = real(inputFFT(bin));
-                    imPart = imag(inputFFT(bin));
-                    
-                    % Compute (b-ma) % mO from paper
-                    if newBin >= paddedBin
-                        cycleShift = mod((newBin - paddedBin), plugin.cycleLength);
-                    else
-                        cycleShift = mod(plugin.cycleLength - (paddedBin - newBin), plugin.cycleLength);
+
+                if PHASEMETHOD == "github"
+                    % Make sure bin is in between range of outputBin
+                    if newBin > 0 && newBin < plugin.nbOutputBins
+                        rePart = real(inputFFT(bin));
+                        imPart = imag(inputFFT(bin));
+    
+                        % Compute (b-ma) % mO from paper
+                        if newBin >= paddedBin
+                            cycleShift = mod((newBin - paddedBin), plugin.cycleLength);
+                        else
+                            cycleShift = mod(plugin.cycleLength - (paddedBin - newBin), plugin.cycleLength);
+                        end
+                        
+                        % (b-ma)p % mO
+                        phaseShift = mod((cycleShift * cycleIndex), plugin.cycleLength);
+                        
+                        % full theta equation
+                        phaseMult = single(phaseShift * multiplier);
+                        
+                        if phaseShift ~= 0
+                            scaledRePrt = (rePart * cos(phaseMult)) - (imPart * sin(phaseMult));
+                            scaledImPrt = (imPart * sin(phaseMult)) + (imPart * cos(phaseMult));
+                            plugin.outputComplex = complex(scaledRePrt, scaledImPrt);
+                        end
+                        plugin.outputSpectrum(newBin) = plugin.outputComplex;
+
                     end
-%                     disp(cycleShift)
-                    
-                    % (b-ma)p % mO
-                    phaseShift = mod((cycleShift * cycleIndex), plugin.cycleLength);
-                    
-                    % full theta equation
-                    phaseMult = single(phaseShift * multiplier);
-         
-                    if phaseShift ~= 0
-                        scaledRePrt = (rePart * cos(phaseMult)) - (imPart * sin(phaseMult));
-                        scaledImPrt = (imPart * sin(phaseMult)) + (imPart * cos(phaseMult));
-                        plugin.outputComplex = complex(scaledRePrt, scaledImPrt);
-                    end
-                    
-                    plugin.outputSpectrum(newBin) = plugin.outputComplex;
-               
+                elseif PHASEMETHOD == "paper"
+                   if newBin > 0 && newBin < plugin.nbOutputBins
+                       work = complex(inputFFT(bin));
+
+                       % Compute (b-ma) % mO from paper
+                        if newBin >= paddedBin
+                            cycleShift = mod((newBin - paddedBin), plugin.cycleLength);
+                        else
+                            cycleShift = mod(plugin.cycleLength - (paddedBin - newBin), plugin.cycleLength);
+                        end
+                        
+                        % (b-ma)p % mO
+                        phaseShift = mod((cycleShift * cycleIndex), plugin.cycleLength);
+                        
+                        if phaseShift ~= 0
+                            index = mod((plugin.cycleLength - phaseShift), plugin.cycleLength);
+                            if index ~= 0
+                                plugin.outputComplex = work * plugin.unityRoots(index);
+                            else
+                                plugin.outputComplex = work * plugin.unityRoots(1);
+                            end
+                        end
+                        plugin.outputSpectrum(newBin) = complex(plugin.outputComplex);
+
+                   end
+
                 end
+               
+                
             end
         end
 

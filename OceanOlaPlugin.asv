@@ -77,7 +77,7 @@ classdef OceanOlaPlugin < audioPlugin & matlab.System
 
             %%%%%% INIT USEFUL VARIABLES %%%%%%
             plugin.blockSize = 1024; % 'N' in the paper
-            plugin.overlap = 8; % 'O' in the paper
+            plugin.overlap = 4; % 'O' in the paper
             plugin.hopSize = plugin.blockSize / plugin.overlap; % size of input and output audio chunks, N/O
 %             plugin.zeroPad = 2; % 'm' in the paper
             plugin.nbInputBins = (plugin.blockSize / 2) + 1; % Number of spectral bins, input
@@ -124,6 +124,8 @@ classdef OceanOlaPlugin < audioPlugin & matlab.System
             plugin.scaledImPart = zeros(plugin.nbOutputBins, 1, 'single');
 
             plugin.cycleLength = plugin.overlap * plugin.zeroPad;
+
+            plugin.unityRoots = complex(getRoots(plugin.cycleLength, plugin.cycleLength));
 
         end
         
@@ -329,7 +331,8 @@ classdef OceanOlaPlugin < audioPlugin & matlab.System
         end
 
         function set.Zeropad(plugin, val)
-            plugin.zeroPad = str2double(val); 
+            plugin.Zeropad = val;
+            plugin.zeroPad = str2double(val); %#ok<MCSUP>
         end
 
     end
@@ -368,31 +371,56 @@ classdef OceanOlaPlugin < audioPlugin & matlab.System
 
                 % Compute new shifted bin
                 newBin = floor((paddedBin * plugin.pitchShiftRatio) + 0.5); % b:= floor(m*k*a + 0.5)
+                
+                PHASEMETHOD = "gihub";
+%                 PHASEMETHOD = "paper";
 
-                % Make sure bin is in between range of outputBin
-                if newBin > 0 && newBin < plugin.nbOutputBins
-                    rePart = real(inputFFT(bin));
-                    imPart = imag(inputFFT(bin));
-                    
-                    % Compute (b-ma) % mO from paper
-                    if newBin >= paddedBin
-                        cycleShift = mod((newBin - paddedBin), plugin.cycleLength);
-                    else
-                        cycleShift = mod(plugin.cycleLength - (paddedBin - newBin), cycleIndex);
+
+                if PHASEMETHOD == "github"
+                    % Make sure bin is in between range of outputBin
+                    if newBin > 0 && newBin < plugin.nbOutputBins
+                        rePart = real(inputFFT(bin));
+                        imPart = imag(inputFFT(bin));
+    
+                        % Compute (b-ma) % mO from paper
+                        if newBin >= paddedBin
+                            cycleShift = mod((newBin - paddedBin), plugin.cycleLength);
+                        else
+                            cycleShift = mod(plugin.cycleLength - (paddedBin - newBin), plugin.cycleLength);
+                        end
+                        
+                        % (b-ma)p % mO
+                        phaseShift = mod((cycleShift * cycleIndex), plugin.cycleLength);
+                        
+                        % full theta equation
+                        phaseMult = single(phaseShift * multiplier);
+                        
+                        if phaseShift ~= 0
+                            scaledRePrt = (rePart * cos(phaseMult)) - (imPart * sin(phaseMult));
+                            scaledImPrt = (imPart * sin(phaseMult)) + (imPart * cos(phaseMult));
+                            plugin.outputComplex = complex(scaledRePrt, scaledImPrt);
+                        end
                     end
-                    
-                    % (b-ma)p % mO
-                    phaseShift = mod((cycleShift * cycleIndex), plugin.cycleLength);
-                    
-                    % full theta equation
-                    phaseMult = single(phaseShift * multiplier);
-         
-                    if phaseShift ~= 0
-                        scaledRePrt = (rePart * cos(phaseMult)) - (imPart * sin(phaseMult));
-                        scaledImPrt = (imPart * sin(phaseMult)) + (imPart * cos(phaseMult));
-                        plugin.outputComplex = complex(scaledRePrt, scaledImPrt);
-                    end
-                    
+                elseif PHASEMETHOD == "paper"
+                   if newBin > 0 && newBin < plugin.nbOutputBins
+                       work = complex(inputFFT(bin));
+
+                       % Compute (b-ma) % mO from paper
+                        if newBin >= paddedBin
+                            cycleShift = mod((newBin - paddedBin), plugin.cycleLength);
+                        else
+                            cycleShift = mod(plugin.cycleLength - (paddedBin - newBin), plugin.cycleLength);
+                        end
+                        
+                        % (b-ma)p % mO
+                        phaseShift = mod((cycleShift * cycleIndex), plugin.cycleLength);
+
+                        if phaseShift ~= 0
+                            newWork = work * plugin.unityRoots(mod(plugin.cycleLength - phaseShift), plugin.cycleLength)
+                        end
+                   end
+
+                end
                     plugin.outputSpectrum(newBin) = plugin.outputComplex;
                
                 end
