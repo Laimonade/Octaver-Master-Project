@@ -1,4 +1,6 @@
 # Octaver-Master-Project
-A real-time Octaver audio plugin based on the OCEAN algorithm in the frequency domain.
+A real-time Octaver audio plugin inspired by the Ocean algorithm [1] in the frequency domain, implemented with the more efficient sliding DFT method.
 
-The current working version is the "OceanOlaPlugin.m" file.
+Test bench for the original algorithm is presented in "OceanTestBenchPlugin.m" file.
+To run it, download the project, open the file in Matlab and use the command line tool "AudioTestBench" to open it as such:
+"AudioTestBench(OceanTestBenchPlugin)".
